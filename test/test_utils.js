@@ -18,6 +18,7 @@ suite('utils', function () {
     assert(utils.hasDuplicates([1, 3, 1]));
     assert(!utils.hasDuplicates([]));
     assert(!utils.hasDuplicates(['ab', 'cb']));
+    assert(!utils.hasDuplicates(['toString']));
     assert(utils.hasDuplicates(['ab', 'cb'], function (s) { return s[1]; }));
   });
 
@@ -139,6 +140,23 @@ suite('utils', function () {
       assert.equal(s.length, 10);
       s = r.nextString(5, '#!');
       assert.equal(s.length, 5);
+    });
+
+  });
+
+  suite('Tap', function () {
+
+    var BufferPool = utils.BufferPool;
+
+    test('alloc negative length', function () {
+      var pool = new BufferPool(16);
+      assert.throws(function () { pool.alloc(-1); });
+    });
+
+    test('alloc beyond pool size', function () {
+      var pool = new BufferPool(4);
+      assert.equal(pool.alloc(3).length, 3);
+      assert.equal(pool.alloc(2).length, 2);
     });
 
   });

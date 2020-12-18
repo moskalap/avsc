@@ -134,7 +134,7 @@ suite('services', function () {
     test('get messages', function () {
       var svc;
       svc = Service.forProtocol({protocol: 'Empty'});
-      assert.deepEqual(svc.messages, {});
+      assert.deepEqual(svc.messages, []);
       svc = Service.forProtocol({
         protocol: 'Ping',
         messages: {
@@ -454,6 +454,7 @@ suite('services', function () {
       var messages = [];
       createReadableStream(frames)
         .pipe(new FrameDecoder())
+        .pipe(createWritableStream(messages))
         .on('finish', function () {
           assert.deepEqual(
             messages,
@@ -463,8 +464,7 @@ suite('services', function () {
             ]
           );
           done();
-        })
-        .pipe(createWritableStream(messages));
+        });
     });
 
     test('decode with trailing data', function (done) {
@@ -490,10 +490,10 @@ suite('services', function () {
     test('decode empty', function (done) {
       createReadableStream([])
         .pipe(new FrameDecoder())
-        .on('end', function () {
+        .pipe(createWritableStream([]))
+        .on('finish', function () {
           done();
-        })
-        .pipe(createWritableStream([]));
+        });
     });
 
     test('encode empty', function (done) {
@@ -773,7 +773,7 @@ suite('services', function () {
       // end the underlying writable stream.
       var transports = createPassthroughTransports(true);
       svc.createClient()
-        .createChannel(transports[0], {objectMode: true})
+        .createChannel(transports[0], {noPing: true, objectMode: true})
         .on('eot', function () { done(); });
       transports[0].writable.end();
     });
@@ -2827,7 +2827,7 @@ suite('services', function () {
               // Attach error handler to channel.
               server.on('error', function (err, chn) {
                 assert(/duplicate backward middleware/.test(err), err);
-                assert.strictEqual(chn.server. server);
+                assert.strictEqual(chn.server, server);
                 setTimeout(function () { done(); }, 0);
               });
               next(null, function (err, prev) {
@@ -2861,7 +2861,7 @@ suite('services', function () {
                 return;
               }
               assert.equal(sawFoo, 1);
-              assert(/invalid "bytes"/.test(err.message));
+              assert(/invalid "bytes"/.test(err.message), err);
               setTimeout(function () { done(); }, 0);
             })
             .use(function (wreq, wres, next) {
@@ -3250,8 +3250,7 @@ function createReadableStream(bufs) {
   Stream.prototype._read = function () {
     this.push(bufs[n++] || null);
   };
-  var readable = new Stream();
-  return readable;
+  return new Stream();
 }
 
 function createWritableStream(bufs) {

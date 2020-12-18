@@ -984,14 +984,14 @@ suite('types', function () {
       }
     ];
 
-    var schemas = [
-      {name: 'Foo', size: 0},
+    var invalidSchemas = [
+      {name: 'Foo', size: NaN},
       {name: 'Foo', size: -2},
       {name: 'Foo'},
       {}
     ];
 
-    testType(builtins.FixedType, data, schemas);
+    testType(builtins.FixedType, data, invalidSchemas);
 
     test('get full name', function () {
       var t = Type.forSchema({
@@ -1019,6 +1019,11 @@ suite('types', function () {
     test('get size', function () {
       var t = Type.forSchema({type: 'fixed', size: 5, name: 'Id'});
       assert.equal(t.getSize(), 5);
+    });
+
+    test('get zero size', function () {
+      var t = Type.forSchema({type: 'fixed', size: 0, name: 'Id'});
+      assert.equal(t.getSize(), 0);
     });
 
     test('resolve', function () {
@@ -1447,6 +1452,28 @@ suite('types', function () {
           fields: [{name: 'age', type: 'int'}, {name: 'age', type: 'float'}]
         });
       });
+    });
+
+    test('invalid name', function () {
+      var schema = {
+        name: 'foo-bar.Bar',
+        type: 'record',
+        fields: [{name: 'id', type: 'int'}]
+      };
+      assert.throws(function () {
+        Type.forSchema(schema);
+      }, /invalid name/);
+    });
+
+    test('reserved name', function () {
+      var schema = {
+        name: 'case',
+        type: 'record',
+        fields: [{name: 'id', type: 'int'}]
+      };
+      var Case = Type.forSchema(schema).recordConstructor;
+      var c = new Case(123);
+      assert.equal(c.id, 123);
     });
 
     test('default constructor', function () {
@@ -2372,6 +2399,18 @@ suite('types', function () {
       assert.equal(t.getField('id').getType().getName(), 'Bar');
     });
 
+    test('omit record methods', function () {
+      var t = Type.forSchema({
+        type: 'record',
+        name: 'Foo',
+        fields: [{name: 'id', type: 'string'}]
+      }, {omitRecordMethods: true});
+      var Foo = t.recordConstructor;
+      assert.strictEqual(Foo.type, undefined);
+      var v = t.clone({id: 'abc'});
+      assert.strictEqual(v.toBuffer, undefined);
+    });
+
   });
 
   suite('AbstractLongType', function () {
@@ -2532,6 +2571,22 @@ suite('types', function () {
 
       test('random', function () {
         assert(slowLongType.isValid(slowLongType.random()));
+      });
+
+      test('evolution to/from', function () {
+        var t1 = Type.forSchema({
+          type: 'record',
+          name: 'Foo',
+          fields: [{name: 'foo', type: 'long'}],
+        }, {registry: {long: slowLongType}});
+        var t2 = Type.forSchema({
+          type: 'record',
+          name: 'Foo',
+          fields: [{name: 'bar', aliases: ['foo'], type: 'long'}],
+        }, {registry: {long: slowLongType}});
+        var rsv = t2.createResolver(t1);
+        var buf = t1.toBuffer({foo: 2});
+        assert.deepEqual(t2.fromBuffer(buf, rsv), {bar: 2});
       });
 
     });
@@ -2827,9 +2882,9 @@ suite('types', function () {
         ['null', {type: 'int', logicalType: 'age'}],
         {logicalTypes: logicalTypes, wrapUnions: true}
       );
-      var resolver = t.createResolver(t)
+      var resolver = t.createResolver(t);
       var v = {'int': 34};
-      assert.deepEqual(t.fromBuffer(t.toBuffer(v), resolver), v)
+      assert.deepEqual(t.fromBuffer(t.toBuffer(v), resolver), v);
     });
 
     test('even integer', function () {
@@ -2925,6 +2980,36 @@ suite('types', function () {
       assert(!t.isValid({int: 3}));
     });
 
+    test('of records inside wrapped union', function () {
+      function PassThroughType(schema, opts) {
+        LogicalType.call(this, schema, opts);
+      }
+      util.inherits(PassThroughType, LogicalType);
+      PassThroughType.prototype._fromValue = function (val) { return val; };
+      PassThroughType.prototype._toValue = PassThroughType.prototype._fromValue;
+
+      var t = types.Type.forSchema(
+        [
+          {
+            type: 'record',
+            logicalType: 'pt',
+            name: 'A',
+            fields: [{name: 'a', type: 'int'}]
+          },
+          {
+            type: 'record',
+            logicalType: 'pt',
+            name: 'B',
+            fields: [{name: 'b', type: 'int'}]
+          }
+        ],
+        {logicalTypes: {pt: PassThroughType}, wrapUnions: true}
+      );
+      assert(t.isValid({A: {a: 123}}));
+      assert(t.isValid({B: {b: 456}}));
+      assert(!t.isValid({B: {a: 456}}));
+    });
+
     // Unions are slightly tricky to override with logical types since their
     // schemas aren't represented as objects.
     suite('union logical types', function () {
@@ -2951,29 +3036,29 @@ suite('types', function () {
         };
       }
 
+      /**
+      * A generic union type which exposes its values directly.
+      *
+      * This implementation predates the existence of the
+      * `UnwrappedUnionType` currently in the built-in types. It can still be
+      * used as an example to implement custom unwrapped unions (which would
+      * be able to cover ambiguous unions).
+      *
+      */
+      function UnwrappedUnionType(schema, opts) {
+        LogicalType.call(this, schema, opts);
+      }
+      util.inherits(UnwrappedUnionType, LogicalType);
+
+      UnwrappedUnionType.prototype._fromValue = function (val) {
+        return val === null ? null : val[Object.keys(val)[0]];
+      };
+
+      UnwrappedUnionType.prototype._toValue = function (any) {
+        return this.getUnderlyingType().clone(any, {wrapUnions: true});
+      };
+
       test('unwrapped', function () {
-
-        /**
-        * A generic union type which exposes its values directly.
-        *
-        * This implementation predates the existence of the
-        * `UnwrappedUnionType` currently in the built-in types. It can still be
-        * used as an example to implement custom unwrapped unions (which would
-        * be able to cover ambiguous unions).
-        *
-        */
-        function UnwrappedUnionType(schema, opts) {
-          LogicalType.call(this, schema, opts);
-        }
-        util.inherits(UnwrappedUnionType, LogicalType);
-
-        UnwrappedUnionType.prototype._fromValue = function (val) {
-          return val === null ? null : val[Object.keys(val)[0]];
-        };
-
-        UnwrappedUnionType.prototype._toValue = function (any) {
-          return this.getUnderlyingType().clone(any, {wrapUnions: true});
-        };
 
         var t1 = Type.forSchema(
           schema,
@@ -2988,6 +3073,39 @@ suite('types', function () {
           {Person: {name: 'Ann', age: {'int': 23}}}
         );
 
+      });
+
+      test('unwrapped with nested logical types', function () {
+
+        var schema = [
+          'null',
+          {
+            type: 'record',
+            name: 'Foo',
+            fields: [
+              {
+                name: 'date',
+                type: [
+                  'null',
+                  {type: 'long', logicalType: 'timestamp-millis'}
+                ]
+              }
+            ]
+          }
+        ];
+        var t1 = Type.forSchema(
+          schema,
+          {
+            logicalTypes: {'timestamp-millis': DateType},
+            typeHook: createUnionTypeHook(UnwrappedUnionType),
+            wrapUnions: true,
+          }
+        );
+        var obj = {date: new Date(1234)};
+        assert(t1.isValid(obj));
+        var buf = t1.toBuffer(obj);
+        var t2 = Type.forSchema(schema, {wrapUnions: true});
+        assert.deepEqual(t2.fromBuffer(buf), {Foo: {date: {long: 1234}}});
       });
 
       test('optional', function () {
@@ -3968,6 +4086,35 @@ suite('types', function () {
           // This will throw an error.
           return null;
         }
+      }
+    });
+
+    test('type hook array', function () {
+      var i = 1;
+      var t = infer([{foo: 2}, {foo: 3}], {typeHook: hook}).itemsType;
+      assert.equal(t.name, 'Foo3');
+      assert.equal(t.field('foo').type.typeName, 'int');
+
+      function hook(schema) {
+        if (schema.type !== 'record') {
+          return;
+        }
+        schema.name = 'Foo' + (i++);
+      }
+    });
+
+    test('type hook nested array', function () {
+      var i = 1;
+      var outer = infer([[{foo: 2}], [{foo: 3}]], {typeHook: hook});
+      var inner = outer.itemsType.itemsType;
+      assert.equal(inner.name, 'Foo3');
+      assert.equal(inner.field('foo').type.typeName, 'int');
+
+      function hook(schema) {
+        if (schema.type !== 'record') {
+          return;
+        }
+        schema.name = 'Foo' + (i++);
       }
     });
 
