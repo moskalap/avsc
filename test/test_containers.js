@@ -10,8 +10,9 @@ var containers = require('../lib/containers'),
 
 
 var BLOCK_TYPE = containers.BLOCK_TYPE;
+var Block = BLOCK_TYPE.recordConstructor;
 var HEADER_TYPE = containers.HEADER_TYPE;
-var Header = HEADER_TYPE.getRecordConstructor();
+var Header = HEADER_TYPE.recordConstructor;
 var MAGIC_BYTES = containers.MAGIC_BYTES;
 var SYNC = utils.bufferFrom('atokensyncheader');
 var Type = types.Type;
@@ -461,6 +462,30 @@ suite('containers', function () {
         decoder.end();
       });
 
+      test('corrupt data', function (cb) {
+        var type = Type.forSchema('string');
+        var decoder = new BlockDecoder()
+          .on('data', function () {})
+          .on('error', function () { cb(); });
+        var header = new Header(
+          MAGIC_BYTES,
+          {
+            'avro.schema': utils.bufferFrom('"string"'),
+            'avro.codec': utils.bufferFrom('null')
+          },
+          SYNC
+        );
+        decoder.write(header.toBuffer());
+        decoder.end(new Block(
+          5,
+          Buffer.concat([
+            type.toBuffer('hi'),
+            utils.bufferFrom([77]) // Corrupt (negative length).
+          ]),
+          SYNC
+        ).toBuffer());
+      });
+
     });
 
   });
@@ -660,14 +685,51 @@ suite('containers', function () {
           cb();
         });
       encoder.pipe(decoder);
-      encoder.write({name: 'Ann'})
-      encoder.write({name: 'Jane'})
+      encoder.write({name: 'Ann'});
+      encoder.write({name: 'Jane'});
       encoder.end();
+    });
 
-      function parseHook(schema) {
-        assert.deepEqual(schema, t1.getSchema());
-        return t2;
-      }
+    test('ignore serialization error', function (cb) {
+      var data = [];
+      var numErrs = 0;
+      var encoder = new streams.BlockEncoder('int')
+        .on('error', function () { numErrs++; });
+      var decoder = new streams.BlockDecoder()
+        .on('data', function (val) { data.push(val); })
+        .on('end', function () {
+          assert.equal(numErrs, 2);
+          assert.deepEqual(data, [1, 2, 3]);
+          cb();
+        });
+      encoder.pipe(decoder);
+      encoder.write(1);
+      encoder.write('foo');
+      encoder.write(2);
+      encoder.write(3);
+      encoder.write(4.5);
+      encoder.end();
+    });
+
+    test('custom type error handler', function (cb) {
+      var okVals = [];
+      var badVals = [];
+      var encoder = new streams.BlockEncoder('int')
+        .removeAllListeners('typeError')
+        .on('typeError', function (err, val) { badVals.push(val); });
+      var decoder = new streams.BlockDecoder()
+        .on('data', function (val) { okVals.push(val); })
+        .on('end', function () {
+          assert.deepEqual(okVals, [1, 2]);
+          assert.deepEqual(badVals, ['foo', 5.4]);
+          cb();
+        });
+      encoder.pipe(decoder);
+      encoder.write('foo');
+      encoder.write(1);
+      encoder.write(2);
+      encoder.write(5.4);
+      encoder.end();
     });
 
     test('metadata', function (cb) {

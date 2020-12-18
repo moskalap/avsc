@@ -32,8 +32,8 @@ declare namespace schema {
       doc?: string;
       type: Schema;
       default?: any;
+      order?: "ascending" | "descending" | "ignore";
     }[];
-    order?: "ascending" | "descending" | "ignore";
   }
 
   interface EnumType {
@@ -100,8 +100,9 @@ interface ForSchemaOptions {
   logicalTypes: { [type: string]: new (schema: Schema, opts?: any) => types.LogicalType; };
   namespace: string;
   noAnonymousTypes: boolean;
+  omitRecordMethods: boolean;
   registry: { [name: string]: Type };
-  typeHook: (schema: Schema, opts: ForSchemaOptions) => Type;
+  typeHook: (schema: Schema, opts: ForSchemaOptions) => Type | undefined;
   wrapUnions: boolean | 'auto' | 'always' | 'never';
 }
 
@@ -238,7 +239,10 @@ export namespace Service {
     objectMode: boolean;
   }
 
-  type TransportFunction = () => void; // TODO
+  
+
+  type TransportFunctionCallback = (err: Error|null|undefined, res?: stream.Stream) => void;
+  type TransportFunction = (cb: TransportFunctionCallback) => stream.Stream; // TODO
 
   type Transport = stream.Duplex | TransportFunction;
 
@@ -356,7 +360,7 @@ export namespace types {
   class LongType extends Type {
     constructor();
     random(): LongType;
-    static __with(methods: object, noUnpack?: boolean): void;
+    static __with(methods: object, noUnpack?: boolean): LongType;
   }
 
   class MapType extends Type {
